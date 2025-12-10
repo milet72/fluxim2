@@ -1,0 +1,12 @@
+{
+  "name": "fluxim2",
+  "version": "1.0.0",
+  "description": "Simple Node.js app to generate images via Replicate without external frameworks.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT"
+}
