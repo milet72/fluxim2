@@ -1,0 +1,19 @@
+{
+  "name": "fluxim2",
+  "version": "1.0.0",
+  "description": "Simple Node.js app to generate images via Replicate.",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "nodemon": "^3.1.11",
+    "replicate": "^1.4.0"
+  }
+}

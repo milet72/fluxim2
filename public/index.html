@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="pl">
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<title>Flux2 Image Maker</title>
+		<link rel="stylesheet" href="/fluxim/styles.css">
+	</head>
+	<body>
+		<div class="container">
+			<h1 class="title">Dream something with <a href="https://replicate.com/" target="_blank" rel="noreferrer">Replicate</a></h1>
+			<div class="panel">
+				<form id="prompt-form" class="form">
+					<div class="form-row">
+						<label for="model">Model</label>
+						<select id="model" name="model">
+							<option value="flux-2-klein-9b-base">FLUX2.klein9B</option>
+							<option value="flux-2-klein-4b">FLUX2.klein4B</option>
+							<option value="flux-2-dev">FLUX2.dev</option>
+<!--
+							<option value="flux-schnell">FLUX.schnell</option>
+-->
+							<option value="flux-dev">FLUX.dev</option>
+							<option value="flux-pro">FLUX.pro</option>
+							<option value="hidream-l1-fast">HiDream-L1.fast</option>
+							<option value="p-image">P-Image</option>
+							<option value="z-image-turbo">Z-Image Turbo</option>
+							<option value="" disabled>--- Other models ---</option>
+							<option value="qwen-image">Qwen</option>
+						</select>
+					</div>
+					<div class="form-row">
+						<label for="prompt">Opisz obraz</label>
+						<textarea id="prompt" name="prompt" placeholder="Enter a prompt to display an image" rows="4"></textarea>
+					</div>
+					<div class="form-grid">
+						<label>Ziarenko
+							<input type="text" id="seed" name="seed" placeholder="ziarenko">
+						</label>
+						<label>Format obrazu
+							<select id="aspectRatio" name="aspectRatio">
+								<option value="1:1">1:1</option>
+								<option value="16:9">16:9</option>
+								<option value="21:9">21:9</option>
+								<option value="2:3">2:3</option>
+								<option value="3:2">3:2</option>
+								<option value="4:5">4:5</option>
+								<option value="5:4">5:4</option>
+								<option value="9:16">9:16</option>
+								<option value="9:21">9:21</option>
+							</select>
+						</label>
+						<label>Nazwa użytkownika
+							<input type="text" id="user_name" name="user_name" placeholder="(zostawić puste)">
+						</label>
+						<label>Podaj hasło
+							<input type="password" id="password" name="password" placeholder="hasło">
+						</label>
+					</div>
+					<button class="submit" type="submit">Rysuj!</button>
+				</form>
+			</div>
+
+			<div class="output" id="output"></div>
+			<div class="error" id="error"></div>
+		</div>
+
+		<script src="/fluxim/main.js"></script>
+	</body>
+</html>
