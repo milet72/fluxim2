@@ -37,6 +37,30 @@ function mapValue(map, value, fallback)
 	return result;
 } // mapValue()
 
+function seededRandom(seed)
+{
+	return function()
+	{
+		seed = (seed * 1664525 + 1013904223) >>> 0;
+		return seed / 4294967296;
+	};
+} // seededRandom()
+
+function randomText(seed, len)
+{
+	const chars = 'abcdefghijklmnopqrstuvwxyz';
+	let result = '';
+	const rnd = seededRandom(seed);
+
+	for(let i=0; i<len; i++)
+	{
+		const idx = Math.floor(rnd() * chars.length);
+		result += chars.charAt(idx);
+	}
+
+	return result;
+} // randomText()
+
 function aspectToSize(aspectStr, maxSize)
 {
 	const match = aspectStr.match(/(\d+):(\d+)/);
@@ -65,7 +89,9 @@ function aspectToResolutionString(aspectStr)
 			['21:9',	'1360 × 768 (Landscape)'],
 			['2:3',		'832 × 1248 (Portrait)'],
 			['3:2',		'1248 × 832 (Landscape)'],
+			['3:4',		'880 × 1168 (Portrait)'],
 			['4:5',		'880 × 1168 (Portrait)'],
+			['4:3',		'1168 × 880 (Landscape)'],
 			['5:4',		'1168 × 880 (Landscape)'],
 			['9:16',	'768 × 1360 (Portrait)'],
 			['9:21',	'768 × 1360 (Portrait)']
@@ -142,7 +168,7 @@ function getBFLPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableS
 	return payload;
 } // getBFLPayload()
 
-function getPrunaPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety)
+function getPrunaPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety, enhanceRandomness)
 {
 	const [w, h] = aspectToSize(aspectRatio, 1024);
 	const w16 = alignTo16(w);
@@ -150,21 +176,36 @@ function getPrunaPayload(prompt, aspectRatio, seed, outputFormat, goFast, disabl
 	const payload = 
 		{
 			prompt: prompt,
-			negative_prompt: "",
 			aspect_ratio: aspectRatio,
-			resolution: aspectToResolutionString(aspectRatio),
 			width: w16,
 			height: h16,
 			seed: seed,
 			go_fast: goFast,
+			output_format: outputFormat,
+			disable_safety_checker: disableSafety,
+			guidance_scale: 1,
+			num_inference_steps: 8
+		};
+	if(enhanceRandomness)
+		payload.prompt += '---RANDOM SEED: ' + randomText(seed, 16);
+	return payload;
+} // getPrunaPayload()
+
+function getHiDreamPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety)
+{
+	const payload = 
+		{
+			prompt: prompt,
+			negative_prompt: '',
+			aspect_ratio: aspectRatio,
+			resolution: aspectToResolutionString(aspectRatio),
+			seed: seed,
 			speed_mode: goFast ? 'Extra Juiced 🚀 (even more speed)' : 'Unsqueezed 🍋 (highest quality)',
 			output_format: outputFormat,
 			disable_safety_checker: disableSafety,
-			guidance_scale: 0,
-			num_inference_steps: 8
 		};
 	return payload;
-} // getPrunaPayload()
+} // getHiDreamPayload()
 
 function getQwenPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety)
 {
@@ -182,7 +223,7 @@ function getQwenPayload(prompt, aspectRatio, seed, outputFormat, goFast, disable
 			image_size: "optimize_for_quality",
 			lora_scale: 1,
 			enhance_prompt: false,
-			num_inference_steps: 50
+			num_inference_steps: 30
 		};
 	return payload;
 } // getQwenPayload()
@@ -203,8 +244,12 @@ function getModelPayload(shortModelName, prompt, aspectRatio, seed, outputFormat
 			break;
 		case 'p-image':
 		case 'z-image-turbo':
+			result = getPrunaPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety, true);
+			break;
 		case 'hidream-l1-fast':
-			result = getPrunaPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety);
+		case 'hidream-l1-dev':
+		case 'hidream-l1-full':
+			result = getHiDreamPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety);
 			break;
 		case 'qwen-image':
 			result = getQwenPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety);
@@ -217,7 +262,6 @@ function getModelPayload(shortModelName, prompt, aspectRatio, seed, outputFormat
 
 async function submitHandler(event)
 {
-	console.log('submitHandler() entry');
 	event.preventDefault();
 	reportError('');
 	outputElem.innerHTML = '<p class="meta">Generating image...</p>';
@@ -233,16 +277,17 @@ async function submitHandler(event)
 	const shortModelName = modelField.value;
 	if(shortModelName=='')
 	{
-		reportError('Please select modeel!');
+		reportError('Please select model!');
 		return;
 	}
 	
 	const aspectRatio = aspectField.value;
-	GLastPrompt = promptField=='' ? 'test image' : promptField.value.replace(/(\r\n|\n|\r)/gm, '. ');
+	GLastPrompt = promptField=='' ? 'test image' : promptField.value;
+	GLastPrompt = GLastPrompt.replaceAll('\r\n', '\n').replaceAll('\n\n', '\n').replaceAll('\n\n', '\n').replaceAll('\n\n', '\n').replaceAll('\n', '. ');
 	GLastSeed = finalSeed;
 
 	const modelPayload = getModelPayload(shortModelName, GLastPrompt, aspectRatio, finalSeed, OUTPUT_FORMAT, false, true);
-	debug(modelPayload);
+	//console.log(modelPayload);
 
 	const requestPayload =
 	{

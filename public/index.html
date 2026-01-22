@@ -4,7 +4,7 @@
 		<meta charset="UTF-8">
 		<meta name="viewport" content="width=device-width, initial-scale=1.0">
 		<title>Flux2 Image Maker</title>
-		<link rel="stylesheet" href="/fluxim/styles.css">
+		<link rel="stylesheet" href="/styles.css">
 	</head>
 	<body>
 		<div class="container">
@@ -12,48 +12,56 @@
 			<div class="panel">
 				<form id="prompt-form" class="form">
 					<div class="form-row">
-						<label for="model">Model</label>
+						<label for="model"><b>Model</b></label>
 						<select id="model" name="model">
-							<option value="flux-2-klein-9b-base">FLUX2.klein9B</option>
+							<option value="" disabled>--- FLUX2 models ---</option>
 							<option value="flux-2-klein-4b">FLUX2.klein4B</option>
+							<option value="flux-2-klein-9b-base" selected>FLUX2.klein9B</option>
 							<option value="flux-2-dev">FLUX2.dev</option>
-<!--
+							<option value="" disabled>--- FLUX (older) models ---</option>
 							<option value="flux-schnell">FLUX.schnell</option>
--->
 							<option value="flux-dev">FLUX.dev</option>
 							<option value="flux-pro">FLUX.pro</option>
-							<option value="hidream-l1-fast">HiDream-L1.fast</option>
+							<option value="" disabled>--- Pruna models ---</option>
 							<option value="p-image">P-Image</option>
 							<option value="z-image-turbo">Z-Image Turbo</option>
-							<option value="" disabled>--- Other models ---</option>
+							<option value="" disabled>--- HiDream models ---</option>
+							<option value="hidream-l1-fast">HiDream-L1.fast</option>
+							<option value="hidream-l1-dev">HiDream-L1.dev</option>
+							<option value="hidream-l1-full">HiDream-L1.full</option>
+							<option value="" disabled>--- Qwen models ---</option>
 							<option value="qwen-image">Qwen</option>
 						</select>
 					</div>
 					<div class="form-row">
-						<label for="prompt">Opisz obraz</label>
+						<label for="prompt"><b>Opis obrazu</b></label>
 						<textarea id="prompt" name="prompt" placeholder="Enter a prompt to display an image" rows="4"></textarea>
 					</div>
 					<div class="form-grid">
-						<label>Ziarenko
+						<label><b>Ziarenko</b>
 							<input type="text" id="seed" name="seed" placeholder="ziarenko">
 						</label>
-						<label>Format obrazu
+						<label><b>Format obrazu</b>
 							<select id="aspectRatio" name="aspectRatio">
-								<option value="1:1">1:1</option>
-								<option value="16:9">16:9</option>
+								<option value="1:1" selected>1:1</option>
+								<option value="" disabled>--- Landscape ---</option>
 								<option value="21:9">21:9</option>
-								<option value="2:3">2:3</option>
-								<option value="3:2">3:2</option>
-								<option value="4:5">4:5</option>
+								<option value="16:9">16:9</option>
 								<option value="5:4">5:4</option>
-								<option value="9:16">9:16</option>
+								<option value="4:3">4:3</option>
+								<option value="3:2">3:2</option>
+								<option value="" disabled>--- Portrait ---</option>
 								<option value="9:21">9:21</option>
+								<option value="9:16">9:16</option>
+								<option value="4:5">4:5</option>
+								<option value="3:4">3:4</option>
+								<option value="2:3">2:3</option>
 							</select>
 						</label>
-						<label>Nazwa użytkownika
+						<label><b>Nazwa użytkownika</b>
 							<input type="text" id="user_name" name="user_name" placeholder="(zostawić puste)">
 						</label>
-						<label>Podaj hasło
+						<label><b>Hasło</b>
 							<input type="password" id="password" name="password" placeholder="hasło">
 						</label>
 					</div>
@@ -65,6 +73,6 @@
 			<div class="error" id="error"></div>
 		</div>
 
-		<script src="/fluxim/main.js"></script>
+		<script src="/main.js"></script>
 	</body>
 </html>

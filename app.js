@@ -3,38 +3,15 @@ const path = require('path');
 const fsp = require('fs/promises');
 const express = require('express');
 const replicate = require ('replicate');
-require('dotenv').config();
-
-let GApp =
-{
-	name: 'Fluxim2',
-	port: process.env.PORT || 3000,
-	express: express(),
-	replicateAPIToken: process.env.REPLICATE_API_TOKEN || '',
-	replicate: new replicate({auth: process.env.REPLICATE_API_TOKEN || ''}),
-	passwords: [],
-	passwordsSep: process.env.PASSWORDS_SEP,
-	purgeTimeHours: parseInt(process.env.PURGE_IMAGES_OLDER_THAN),
-	logFilePath: 'fluxim2.log'
-};
-GApp.passwords = process.env.PASSWORDS.split(GApp.passwordsSep);
-
-
-GApp.express.use(express.static('public'));
-GApp.express.use(express.json());
-GApp.express.post('/replicate', handleReplicatePOST);
-GApp.express.listen(GApp.port, () =>
-{
-	console.log(`${GApp.name} listening on port ${GApp.port}`)
-})
-setTimeout(imagePurgeHandler, 3600);
+require('dotenv').config({quiet: true});
 
 /*
-GApp.express.get('/replicate', (req, res) =>
-{
-	res.send('Hello World!')
-})
+** Utility functions
 */
+function makeUniqueID()
+{
+	return Date.now().toString(36).substring(0, 6) + Math.random().toString(36).substring(2, 8).padStart(6, 0);
+} // makeUniqueID()
 
 function getDateTZ()
 {
@@ -99,6 +76,95 @@ function deleteFilesOlderThan(dirPath, hours)
 	});
 } // deleteFilesOlderThan()
 
+
+/*
+** Model handling
+*/
+const GModels =
+[
+	{name: 'flux-schnell',			provider: 'black-forest-labs',	outputHandler: processMultiResult},
+	{name: 'flux-dev',				provider: 'black-forest-labs',	outputHandler: processMultiResult},
+	{name: 'flux-pro',				provider: 'black-forest-labs',	outputHandler: processMultiResult},
+	{name: 'flux-2-klein-4b',		provider: 'black-forest-labs',	outputHandler: processMultiResult},
+	{name: 'flux-2-klein-9b-base',	provider: 'black-forest-labs',	outputHandler: processMultiResult},
+	{name: 'flux-2-dev',			provider: 'black-forest-labs',	outputHandler: processSingleResult},
+	{name: 'flux-2-pro',			provider: 'black-forest-labs',	outputHandler: processSingleResult},
+	{name: 'hidream-l1-fast',		provider: 'prunaai',			outputHandler: processSingleResult},
+	{name: 'hidream-l1-dev',		provider: 'prunaai',			outputHandler: processSingleResult},
+	{name: 'hidream-l1-full',		provider: 'prunaai',			outputHandler: processSingleResult},
+	{name: 'p-image',				provider: 'prunaai',			outputHandler: processSingleResult},
+	{name: 'z-image-turbo',			provider: 'prunaai',			outputHandler: processSingleResult},
+	{name: 'qwen-image',			provider: 'qwen',				outputHandler: processMultiResult}
+] // GModels[]
+
+async function processMultiResult(output, outputFormat)
+{
+	let result = [];
+
+//	if(output.length>0)
+//		console.log('processMultiResult(), output[0]:', output[0], output[0].url());
+
+	// Write to disk
+	for(const [index, item] of Object.entries(output))
+	{
+		const fileName = `${GApp.imgNamePrefix}-${makeUniqueID()}-${index}.${outputFormat}`;
+		const filePath = 'public/replicate/' + fileName;
+//		console.log('processMultiResult(), result file: ', filePath);
+		await fsp.writeFile(filePath, item);
+		result.push(fileName);
+	}
+	return result;
+} // processMultiResult()
+
+async function processSingleResult(output, outputFormat)
+{
+	let result = [];
+
+//	console.log('processSingleResult(), output:', output, output.url());
+
+	// Write to disk
+	const fileName = `${GApp.imgNamePrefix}-${makeUniqueID()}.${outputFormat}`;
+	const filePath = 'public/replicate/' + fileName;
+//	console.log('processSingleResult(), result file: ', filePath);
+	await fsp.writeFile(filePath, output);
+	result.push(fileName);
+
+	return result;
+} // processSingleResult()
+
+function getFullModelName(shortModelName)
+{
+	let result = '';
+	
+	for(let i=0; i<GModels.length; i++)
+		if(GModels[i].name===shortModelName)
+		{
+			result = GModels[i].provider +  '/' + shortModelName;
+			break;
+		}
+
+	return result;
+} // getFullModelName()
+
+function getOutputHandler(shortModelName)
+{
+	let result;
+	
+	for(let i=0; i<GModels.length; i++)
+		if(GModels[i].name===shortModelName)
+		{
+			result = GModels[i].outputHandler;
+			break;
+		}
+
+	return result;
+} // getOutputHandler()
+
+
+/*
+** Application functions
+*/
+
 function imagePurgeHandler()
 {
 	if(GApp.purgeTimeHours<=0)
@@ -107,11 +173,6 @@ function imagePurgeHandler()
 	logDT(`Purging files older than ${GApp.purgeTimeHours} hours from "./public/replicate/"`, 'i');
 	deleteFilesOlderThan('./public/replicate/', GApp.purgeTimeHours);
 } // imagePurgeHandler()
-
-function makeUniqueID()
-{
-	return Date.now().toString(36).substring(0, 6) + Math.random().toString(36).substring(2, 8).padStart(6, 0);
-} // makeUniqueID()
 
 function checkPassword(password)
 {
@@ -136,69 +197,6 @@ function logDT(message, level)
 	fs.appendFileSync(GApp.logFilePath, messageDT + '\n', 'latin1');
 } // logDT()
 
-function getFullModelName(shortModelName)
-{
-	let result = '';
-	switch(shortModelName)
-	{
-		case 'flux-schnell':
-		case 'flux-dev':
-		case 'flux-pro':
-		case 'flux-2-klein-4b':
-		case 'flux-2-klein-9b-base':
-		case 'flux-2-dev':
-		case 'flux-2-pro':
-			result = 'black-forest-labs/' + shortModelName;
-			break;
-		case 'hidream-l1-fast':
-		case 'p-image':
-		case 'z-image-turbo':
-			result = 'prunaai/' + shortModelName;
-			break;
-		case 'qwen-image':
-			result = 'qwen/' + shortModelName;
-			break;
-		default:
-			break;
-	}
-	return result;
-} // getFullModelName()
-
-async function ProcessBFLMultiResult(output, outputFormat)
-{
-	let result = [];
-
-//	if(output.length>0)
-//		console.log('ProcessBFLV1Result(), output[0]:', output[0], output[0].url());
-
-	// Write to disk
-	for(const [index, item] of Object.entries(output))
-	{
-		const fileName = `fluxim2-${makeUniqueID()}-${index}.${outputFormat}`;
-		const filePath = 'public/replicate/' + fileName;
-//		console.log('ProcessBFLV1Result(), result file: ', filePath);
-		await fsp.writeFile(filePath, item);
-		result.push(fileName);
-	}
-	return result;
-} // ProcessBFLMultiResult()
-
-async function ProcessBFLSingleResult(output, outputFormat)
-{
-	let result = [];
-
-//	console.log('ProcessBFLV2Result(), output:', output, output.url());
-
-	// Write to disk
-	const fileName = `fluxim2-${makeUniqueID()}.${outputFormat}`;
-	const filePath = 'public/replicate/' + fileName;
-//	console.log('ProcessBFLV2Result(), result file: ', filePath);
-	await fsp.writeFile(filePath, output);
-	result.push(fileName);
-
-	return result;
-} // ProcessBFLSingleResult()
-
 async function handleReplicatePOST(req, res)
 {
 	if(!process.env.REPLICATE_API_TOKEN)
@@ -209,27 +207,38 @@ async function handleReplicatePOST(req, res)
 			.json({ detail: 'Server configuration error: missing API token'});
 	}
 
-	const ip =
+	const clientIP =
 		req.headers['x-forwarded-for'] ||
 		req.socket?.remoteAddress ||
 		'127.0.0.1';
 		
 	const json = req.body;
-	const shortModelName = json.shortModelName;
-	const fullModelName = getFullModelName(shortModelName);
-	logDT(`${ip} ${shortModelName}\n"${json.modelPayload.prompt}"`, 'i');
 	
+	// CHeck password
 	if(!checkPassword(json.password))
 	{
-		logDT(`${ip} Wrong password: "${json.password}"`, 'e');
+		logDT(`${clientIP} Wrong password: "${json.password}"`, 'e');
 		return res
 				.status(500)
-				.json({ detail: 'Błędne hasło'});
+				.json({ detail: 'Wrong password!'});
 	}
 
+	// Process model name
+	const shortModelName = json.shortModelName;
+	const fullModelName = getFullModelName(shortModelName);
+	if(fullModelName=='')
+	{
+		logDT(`${clientIP} Model uknown: "${shortModelName}"`, 'e');
+		return res
+				.status(500)
+				.json({ detail: 'Model unknown!'});
+	}
+
+	// Log info
+	logDT(`${clientIP} ${shortModelName}\n"${json.modelPayload.prompt}"`, 'i');
+
 	const input = json.modelPayload;
-//	console.log('handleReplicatePOST(), Replicate model:', json.fullModelName);
-//	console.log('handleReplicatePOST(), Replicate input:', input);
+//	console.log('handleReplicatePOST(), Replicate model:', json.fullModelName, 'Replicate input:', input);
 	
 	let jobOutput;
 	try
@@ -247,29 +256,59 @@ async function handleReplicatePOST(req, res)
 	}
 //	console.log('handleReplicatePOST(), Replicate output:', jobOutput);
 	
-	let resultPayload;
-
-	switch(shortModelName)
+	let resultPayload = {};
+	
+	const outputHandler = getOutputHandler(shortModelName);
+	if(!outputHandler)
 	{
-		case 'flux-schnell':
-		case 'flux-dev':
-		case 'flux-pro':
-		case 'flux-2-klein-4b':
-		case 'flux-2-klein-9b-base':
-		case 'qwen-image':
-			resultPayload = await ProcessBFLMultiResult(jobOutput, input.output_format);
-			break;
-		case 'flux-2-dev':
-		case 'flux-2-pro':
-		case 'p-image':
-		case 'z-image-turbo':
-		case 'hidream-l1-fast':
-			resultPayload = await ProcessBFLSingleResult(jobOutput, input.output_format);
-			break;
-		default:
-			break;
+		logDT(`${clientIP} No output handler for model: "${shortModelName}"`, 'e');
+		return res
+				.status(500)
+				.json({ detail: 'No output handler!'});
 	}
+
+	resultPayload  = await outputHandler(jobOutput, input.output_format);
 //	console.log('handleReplicatePOST(), resultPayload:', resultPayload);
 
-	return res.status(201).json(resultPayload);
+	return res
+			.status(201)
+			.json(resultPayload);
 } // handleReplicatePOST()
+
+function initApp()
+{
+	GApp.passwords = process.env.PASSWORDS.split(GApp.passwordsSep);
+
+	GApp.express.use(express.static('public'));
+	GApp.express.use(express.json());
+	GApp.express.post('/replicate', handleReplicatePOST);
+	GApp.express.listen(GApp.port, () =>
+	{
+		console.log(`${GApp.name} ${GApp.version} listening on port ${GApp.port}`)
+	})
+/*
+	GApp.express.get('/replicate', (req, res) =>
+	{
+		res.send('Hello World!')
+	})
+*/
+
+	setInterval(imagePurgeHandler, 3600 * 1000);
+} //initApp()
+
+let GApp =
+{
+	name: 'Fluxim2',
+	version: '0.1',
+	imgNamePrefix: 'fluxim2',
+	port: process.env.PORT || 3000,
+	express: express(),
+	replicateAPIToken: process.env.REPLICATE_API_TOKEN || '',
+	replicate: new replicate({auth: process.env.REPLICATE_API_TOKEN || ''}),
+	passwords: [],
+	passwordsSep: process.env.PASSWORDS_SEP,
+	purgeTimeHours: parseInt(process.env.PURGE_IMAGES_OLDER_THAN),
+	logFilePath: process.env.LOG_FILE
+}; // GApp
+
+initApp();
