@@ -2,31 +2,23 @@ const formElem = document.getElementById('prompt-form');
 const outputElem = document.getElementById('output');
 const errorBoxElem = document.getElementById('error');
 
-const OUTPUT_FORMAT = 'png';
 const GDebugEnabled = true;
 let GLastPrompt = '';
 let GLastSeed = '';
 
 function debug()
 {
-	if(GDebugEnabled)
-	{
-		var output = '';
-		for(var i=0; i<arguments.length; i++)
-		{
-			if(i>0)
-				output += ' ';
-			output += String(arguments[i]);
-		}
-		console.log(output);
-	}
+	if(!GDebugEnabled)
+		return;
+	
+	console.log.apply(console, arguments);
 } // debug()
 
-function mapValue(map, value, fallback)
+function mapValue(map, value, fallbackToFirst)
 {
 	let result;
 
-	if(fallback)
+	if(fallbackToFirst)
 		result = map[0][1];
 	for(var i=0; i<map.length; i++)
 		if(map[i][0]===value)
@@ -80,6 +72,20 @@ function aspectToSize(aspectStr, maxSize)
 		return [Math.floor((maxSize * width) / height), maxSize];
 } // aspectToSize()
 
+function imageMPToBaseResolution(imageMP)
+{
+	const translationTable =
+		[
+			[1,	1024],
+			[2,	1408],
+			[4,	2048],
+			[6,	2560],
+			[8,	2880]
+		]; // translationTable[]
+
+	return mapValue(translationTable, imageMP, true);
+} // imageMPToBaseResolution()
+
 function aspectToResolutionString(aspectStr)
 {
 	const translationTable =
@@ -97,7 +103,7 @@ function aspectToResolutionString(aspectStr)
 			['9:21',	'768 × 1360 (Portrait)']
 		]; // translationTable[]
 
-	return mapValue(translationTable, aspectStr);
+	return mapValue(translationTable, aspectStr, true);
 } // aspectToResolutionString()
 
 function reportError(message)
@@ -106,6 +112,37 @@ function reportError(message)
 	errorBoxElem.textContent = message;
 	outputElem.innerHTML = '';
 } // reportError()
+
+const GModelInfo =
+[
+	{name: 'flux-schnell',			maxMP: 1},
+	{name: 'flux-dev',				maxMP: 1},
+	{name: 'flux-pro',				maxMP: 1},
+	{name: 'flux-2-klein-4b',		maxMP: 4},
+	{name: 'flux-2-klein-4b-base',	maxMP: 4},
+	{name: 'flux-2-klein-9b',		maxMP: 4},
+	{name: 'flux-2-klein-9b-base',	maxMP: 4},
+	{name: 'flux-2-dev',			maxMP: 2},
+	{name: 'flux-2-pro',			maxMP: 4},
+	{name: 'hidream-l1-fast',		maxMP: 1},
+	{name: 'hidream-l1-dev',		maxMP: 1},
+	{name: 'hidream-l1-full',		maxMP: 1},
+	{name: 'p-image',				maxMP: 2},
+	{name: 'z-image-turbo',			maxMP: 4},
+	{name: 'qwen-image',			maxMP: 1}
+] // GModelInfo[]
+
+function getModelMaxMP(shortModelName)
+{
+	let result = 1;
+	for(let i=0; i<GModelInfo.length; i++)
+		if(GModelInfo[i].name===shortModelName)
+		{
+			result = GModelInfo[i].maxMP;
+			break;
+		}
+	return result;
+} // getModelMaxMP()
 
 function alignTo16(value)
 {
@@ -123,7 +160,11 @@ function getImageHTML(fileName, w, h)
 					<img src="${url}" alt="${title}" title="${title}" width="${w}" height="${h}" />
 				</a>
 			</div>
-			<p class="meta">${GLastPrompt}<br><i>Ziarenko:</i> <b>${GLastSeed}</b></p>
+			<p class="meta">
+				${GLastPrompt}<br>
+				<i>Nazwa pliku:</i> <b>${fileName}</b><br>
+				<i>Ziarenko:</i> <b>${GLastSeed}</b>
+			</p>
 			`;
 } // getImageHTML()
 
@@ -154,7 +195,7 @@ function renderResult(resultJSON, aspectRatio)
 	outputElem.innerHTML = htmlOutput;
 } // renderResult()
 
-function getBFLPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety)
+function getBFLPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety)
 {
 	const payload = 
 		{
@@ -168,9 +209,11 @@ function getBFLPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableS
 	return payload;
 } // getBFLPayload()
 
-function getPrunaPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety, enhanceRandomness)
+function getPrunaPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety, enhanceRandomness)
 {
-	const [w, h] = aspectToSize(aspectRatio, 1024);
+	const basePixelSize = imageMPToBaseResolution(imageSize);
+	console.log('getPrunaPayload()', imageSize, basePixelSize);
+	const [w, h] = aspectToSize(aspectRatio, basePixelSize);
 	const w16 = alignTo16(w);
 	const h16 = alignTo16(h);
 	const payload = 
@@ -191,7 +234,7 @@ function getPrunaPayload(prompt, aspectRatio, seed, outputFormat, goFast, disabl
 	return payload;
 } // getPrunaPayload()
 
-function getHiDreamPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety)
+function getHiDreamPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety)
 {
 	const payload = 
 		{
@@ -207,7 +250,7 @@ function getHiDreamPayload(prompt, aspectRatio, seed, outputFormat, goFast, disa
 	return payload;
 } // getHiDreamPayload()
 
-function getQwenPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety)
+function getQwenPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety)
 {
 	const payload = 
 		{
@@ -228,7 +271,7 @@ function getQwenPayload(prompt, aspectRatio, seed, outputFormat, goFast, disable
 	return payload;
 } // getQwenPayload()
 
-function getModelPayload(shortModelName, prompt, aspectRatio, seed, outputFormat, goFast, disableSafety)
+function getModelPayload(shortModelName, prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety)
 {
 	let result = {};
 	switch(shortModelName)
@@ -237,22 +280,24 @@ function getModelPayload(shortModelName, prompt, aspectRatio, seed, outputFormat
 		case 'flux-dev':
 		case 'flux-pro':
 		case 'flux-2-klein-4b':
+		case 'flux-2-klein-4b-base':
+		case 'flux-2-klein-9b':
 		case 'flux-2-klein-9b-base':
 		case 'flux-2-dev':
 		case 'flux-2-pro':
-			result = getBFLPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety);
+			result = getBFLPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety);
 			break;
 		case 'p-image':
 		case 'z-image-turbo':
-			result = getPrunaPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety, true);
+			result = getPrunaPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety, true);
 			break;
 		case 'hidream-l1-fast':
 		case 'hidream-l1-dev':
 		case 'hidream-l1-full':
-			result = getHiDreamPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety);
+			result = getHiDreamPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety);
 			break;
 		case 'qwen-image':
-			result = getQwenPayload(prompt, aspectRatio, seed, outputFormat, goFast, disableSafety);
+			result = getQwenPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety);
 			break;
 		default:
 			break;
@@ -260,17 +305,53 @@ function getModelPayload(shortModelName, prompt, aspectRatio, seed, outputFormat
 	return result;
 } // getModelPayload()
 
+function modelChangeHandler(event)
+{
+	const modelName = document.getElementById('model').value;
+	const modelMaxMP = parseInt(getModelMaxMP(modelName));
+	if(modelMaxMP>0)
+	{
+		imageSizeField = document.getElementById('imageSize');
+		switch(modelMaxMP)
+		{
+			case 1:
+				imageSizeField.options[0].disabled = false;
+				imageSizeField.options[1].disabled = true;
+				imageSizeField.options[2].disabled = true;
+				imageSizeField.selectedIndex = 0;
+				break;
+			case 2:
+				imageSizeField.options[0].disabled = false;
+				imageSizeField.options[1].disabled = false;
+				imageSizeField.options[2].disabled = true;
+				if(imageSizeField.selectedIndex==2)
+					imageSizeField.selectedIndex = 1;
+				break;
+			case 4:
+				imageSizeField.options[0].disabled = false;
+				imageSizeField.options[1].disabled = false;
+				imageSizeField.options[2].disabled = false;
+				break;
+			default:
+				break;
+		}
+	}
+} // modelChangeHandler()
+
 async function submitHandler(event)
 {
 	event.preventDefault();
 	reportError('');
 	outputElem.innerHTML = '<p class="meta">Generating image...</p>';
 
+	const modelField = document.getElementById('model');
 	const seedField = document.getElementById('seed');
 	const promptField = document.getElementById('prompt');
 	const aspectField = document.getElementById('aspectRatio');
+	const imageSizeField = document.getElementById('imageSize');
+	const fileFormatField = document.getElementById('fileFormat');
+	const userNameField = document.getElementById('userName');
 	const passwordField = document.getElementById('password');
-	const modelField = document.getElementById('model');
 
 	const seedValue = parseInt(seedField.value, 10);
 	const finalSeed = Number.isNaN(seedValue) ? Math.floor(Math.random() * (1 << 30)) : seedValue;
@@ -282,16 +363,22 @@ async function submitHandler(event)
 	}
 	
 	const aspectRatio = aspectField.value;
-	GLastPrompt = promptField=='' ? 'test image' : promptField.value;
-	GLastPrompt = GLastPrompt.replaceAll('\r\n', '\n').replaceAll('\n\n', '\n').replaceAll('\n\n', '\n').replaceAll('\n\n', '\n').replaceAll('\n', '. ');
+	const imageSize = parseInt(imageSizeField.value);
+	const fileFormat = fileFormatField.value;
+	GLastPrompt = promptField.value;
+	if(GLastPrompt=='')
+		GLastPrompt = 'Test image';
+	else
+		GLastPrompt = GLastPrompt.replaceAll('\r\n', '\n').replaceAll('\n\n', '\n').replaceAll('\n\n', '\n').replaceAll('\n\n', '\n').replaceAll('\n', '. ');
 	GLastSeed = finalSeed;
 
-	const modelPayload = getModelPayload(shortModelName, GLastPrompt, aspectRatio, finalSeed, OUTPUT_FORMAT, false, true);
+	const modelPayload = getModelPayload(shortModelName, GLastPrompt, aspectRatio, imageSize, finalSeed, fileFormat, false, true);
 	//console.log(modelPayload);
 
 	const requestPayload =
 	{
 		shortModelName: shortModelName,
+		userName: userNameField.value,
 		password: passwordField.value,
 		modelPayload: modelPayload
 	};

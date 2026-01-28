@@ -13,10 +13,10 @@
 				<form id="prompt-form" class="form">
 					<div class="form-row">
 						<label for="model"><b>Model</b></label>
-						<select id="model" name="model">
+						<select id="model" name="model" onchange="modelChangeHandler();">
 							<option value="" disabled>--- FLUX2 models ---</option>
 							<option value="flux-2-klein-4b">FLUX2.klein4B</option>
-							<option value="flux-2-klein-9b-base" selected>FLUX2.klein9B</option>
+							<option value="flux-2-klein-9b" selected>FLUX2.klein9B</option>
 							<option value="flux-2-dev">FLUX2.dev</option>
 							<option value="" disabled>--- FLUX (older) models ---</option>
 							<option value="flux-schnell">FLUX.schnell</option>
@@ -41,7 +41,7 @@
 						<label><b>Ziarenko</b>
 							<input type="text" id="seed" name="seed" placeholder="ziarenko">
 						</label>
-						<label><b>Format obrazu</b>
+						<label><b>Proporcje obrazu</b>
 							<select id="aspectRatio" name="aspectRatio">
 								<option value="1:1" selected>1:1</option>
 								<option value="" disabled>--- Landscape ---</option>
@@ -58,8 +58,22 @@
 								<option value="2:3">2:3</option>
 							</select>
 						</label>
+						<label><b>Wielkość obrazu</b>
+							<select id="imageSize" name="imageSize">
+								<option value="1" selected>1 MP</option>
+								<option value="2">2 MP</option>
+								<option value="4">4 MP</option>
+							</select>
+						</label>
+						<label><b>Format pliku</b>
+							<select id="fileFormat" name="fileFormat">
+								<option value="png" selected>PNG</option>
+								<option value="jpg">JPG</option>
+								<option value="webp">WEBP</option>
+							</select>
+						</label>
 						<label><b>Nazwa użytkownika</b>
-							<input type="text" id="user_name" name="user_name" placeholder="(zostawić puste)">
+							<input type="text" id="userName" name="userName" placeholder="(można zostawić puste)">
 						</label>
 						<label><b>Hasło</b>
 							<input type="password" id="password" name="password" placeholder="hasło">

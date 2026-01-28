@@ -1,17 +1,43 @@
+const pjson = require('./package.json');
 const fs = require('fs');
 const path = require('path');
 const fsp = require('fs/promises');
+const { buffer } = require('node:stream/consumers');   
+const dns = require('dns').promises;
 const express = require('express');
-const replicate = require ('replicate');
+const replicate = require('replicate');
+const pngmeta = require('png-metadata-writer');
 require('dotenv').config({quiet: true});
 
 /*
 ** Utility functions
 */
+function debug()
+{
+	if(!GApp.debugEnabled)
+		return;
+	
+	console.log.apply(console, arguments);
+} // debug()
+
 function makeUniqueID()
 {
 	return Date.now().toString(36).substring(0, 6) + Math.random().toString(36).substring(2, 8).padStart(6, 0);
 } // makeUniqueID()
+
+async function getFQDN(ip)
+{
+	let result ='';
+	try
+	{
+		const domains = await dns.reverse(ip);
+		result = domains.length > 0 ? domains[0] : '';
+	}
+	catch (e)
+	{
+	}
+	return result;
+} // getFQDN()
 
 function getDateTZ()
 {
@@ -52,6 +78,7 @@ function deleteFilesOlderThan(dirPath, hours)
 	const now = Date.now();
 	const maxAgeMs = hours * 60 * 60 * 1000;
 
+	let removedCnt = 0;
 	fs.readdir(dirPath, (err, files) =>
 	{
 		if(err)
@@ -70,22 +97,28 @@ function deleteFilesOlderThan(dirPath, hours)
 
 				const ageMs = now - stats.mtimeMs;
 				if(ageMs > maxAgeMs)
+				{
 					fs.unlink(filePath, () => {});
+					removedCnt++;
+				}
 			});
 		}
 	});
+	return removedCnt;
 } // deleteFilesOlderThan()
 
 
 /*
 ** Model handling
 */
-const GModels =
+const GModelInfo =
 [
 	{name: 'flux-schnell',			provider: 'black-forest-labs',	outputHandler: processMultiResult},
 	{name: 'flux-dev',				provider: 'black-forest-labs',	outputHandler: processMultiResult},
 	{name: 'flux-pro',				provider: 'black-forest-labs',	outputHandler: processMultiResult},
 	{name: 'flux-2-klein-4b',		provider: 'black-forest-labs',	outputHandler: processMultiResult},
+	{name: 'flux-2-klein-4b-base',	provider: 'black-forest-labs',	outputHandler: processMultiResult},
+	{name: 'flux-2-klein-9b',		provider: 'black-forest-labs',	outputHandler: processMultiResult},
 	{name: 'flux-2-klein-9b-base',	provider: 'black-forest-labs',	outputHandler: processMultiResult},
 	{name: 'flux-2-dev',			provider: 'black-forest-labs',	outputHandler: processSingleResult},
 	{name: 'flux-2-pro',			provider: 'black-forest-labs',	outputHandler: processSingleResult},
@@ -95,51 +128,16 @@ const GModels =
 	{name: 'p-image',				provider: 'prunaai',			outputHandler: processSingleResult},
 	{name: 'z-image-turbo',			provider: 'prunaai',			outputHandler: processSingleResult},
 	{name: 'qwen-image',			provider: 'qwen',				outputHandler: processMultiResult}
-] // GModels[]
-
-async function processMultiResult(output, outputFormat)
-{
-	let result = [];
-
-//	if(output.length>0)
-//		console.log('processMultiResult(), output[0]:', output[0], output[0].url());
-
-	// Write to disk
-	for(const [index, item] of Object.entries(output))
-	{
-		const fileName = `${GApp.imgNamePrefix}-${makeUniqueID()}-${index}.${outputFormat}`;
-		const filePath = 'public/replicate/' + fileName;
-//		console.log('processMultiResult(), result file: ', filePath);
-		await fsp.writeFile(filePath, item);
-		result.push(fileName);
-	}
-	return result;
-} // processMultiResult()
-
-async function processSingleResult(output, outputFormat)
-{
-	let result = [];
-
-//	console.log('processSingleResult(), output:', output, output.url());
-
-	// Write to disk
-	const fileName = `${GApp.imgNamePrefix}-${makeUniqueID()}.${outputFormat}`;
-	const filePath = 'public/replicate/' + fileName;
-//	console.log('processSingleResult(), result file: ', filePath);
-	await fsp.writeFile(filePath, output);
-	result.push(fileName);
-
-	return result;
-} // processSingleResult()
+] // GModelInfo[]
 
 function getFullModelName(shortModelName)
 {
 	let result = '';
 	
-	for(let i=0; i<GModels.length; i++)
-		if(GModels[i].name===shortModelName)
+	for(let i=0; i<GModelInfo.length; i++)
+		if(GModelInfo[i].name===shortModelName)
 		{
-			result = GModels[i].provider +  '/' + shortModelName;
+			result = GModelInfo[i].provider +  '/' + shortModelName;
 			break;
 		}
 
@@ -150,15 +148,92 @@ function getOutputHandler(shortModelName)
 {
 	let result;
 	
-	for(let i=0; i<GModels.length; i++)
-		if(GModels[i].name===shortModelName)
+	for(let i=0; i<GModelInfo.length; i++)
+		if(GModelInfo[i].name===shortModelName)
 		{
-			result = GModels[i].outputHandler;
+			result = GModelInfo[i].outputHandler;
 			break;
 		}
 
 	return result;
 } // getOutputHandler()
+
+function addMetaData(buffer, metaData)
+{
+	let md = {'tEXt': {}};
+	md['tEXt']['Title'] = metaData.title;
+	md['tEXt']['Author'] = metaData.author;
+	md['tEXt']['Description'] = metaData.description;
+	md['tEXt']['Copyright'] = metaData.copyright;
+	md['tEXt']['Software'] = metaData.software;
+	md['tEXt']['Disclaimer'] = metaData.disclaimer;
+	md['tEXt']['Warning'] = metaData.warning;
+	md['tEXt']['Source'] = metaData.source;
+	md['tEXt']['Comment'] = metaData.comment;
+
+	return pngmeta.writeMetadata(buffer, md);
+} // addMetaData()
+
+async function writeFile(filePath, output, outputFormat, metaData)
+{
+	let fileWritten = false;
+	debug('writeFile(), output:', output);
+	if(GApp.pngMetaDataEnabled && outputFormat=='png')
+	{
+		// Add metadata
+		try
+		{
+			let buf = await buffer(output);
+			buf = addMetaData(buf, metaData);
+			await fsp.writeFile(filePath, buf);
+			fileWritten = true;
+		}
+		catch(err)
+		{
+			const fullMessage = 'writeFile() error: ' + err.message;
+			logDT(fullMessage, 'e');
+		}
+	}
+	
+	if(!fileWritten)
+	{
+		// Just write to disk
+		await fsp.writeFile(filePath, output);
+	}
+} // writeFile()
+
+async function processMultiResult(output, outputFormat, metaData)
+{
+	let result = [];
+
+	if(output.length>0)
+		debug('processMultiResult(), output[0]:', output[0], output[0].url());
+
+	for(const [index, item] of Object.entries(output))
+	{
+		const fileName = `${GApp.imgNamePrefix}-${makeUniqueID()}-${index}.${outputFormat}`;
+		const filePath = 'public/replicate/' + fileName;
+		debug('processMultiResult(), result file: ', filePath);
+		await writeFile(filePath, item, outputFormat, metaData);
+		result.push(fileName);
+	}
+	return result;
+} // processMultiResult()
+
+async function processSingleResult(output, outputFormat, metaData)
+{
+	let result = [];
+
+	debug('processSingleResult(), output:', output);
+
+	const fileName = `${GApp.imgNamePrefix}-${makeUniqueID()}.${outputFormat}`;
+	const filePath = 'public/replicate/' + fileName;
+	debug('processSingleResult(), result file: ', filePath);
+	await writeFile(filePath, output, outputFormat, metaData);
+	result.push(fileName);
+
+	return result;
+} // processSingleResult()
 
 
 /*
@@ -170,8 +245,17 @@ function imagePurgeHandler()
 	if(GApp.purgeTimeHours<=0)
 		return;
 
-	logDT(`Purging files older than ${GApp.purgeTimeHours} hours from "./public/replicate/"`, 'i');
-	deleteFilesOlderThan('./public/replicate/', GApp.purgeTimeHours);
+	let	removedCnt = 0;
+	try
+	{
+		removedCnt = deleteFilesOlderThan('./public/replicate/', GApp.purgeTimeHours);
+	}
+	catch(err)
+	{
+		const fullMessage = 'imagePurgeHandler() error: ' + err.message;
+		logDT(fullMessage, 'e');
+	}
+	logDT(`Purging files older than ${GApp.purgeTimeHours} hours from "./public/replicate/", removed ${removedCnt} files`, 'i');
 } // imagePurgeHandler()
 
 function checkPassword(password)
@@ -190,7 +274,7 @@ function logDT(message, level)
 			['w',	'WARN']
 		]; // levelMap[]
 
-	const timestamp = getDateTZ().toLocaleString('pl-PL');
+	const timestamp = getDateTZ().toLocaleString(GApp.locale);
 	const typeStr = mapValue(levelMap, level, true);
 	const messageDT = `${timestamp}: ${typeStr} ${message}`;
 	console.log(messageDT);
@@ -199,25 +283,18 @@ function logDT(message, level)
 
 async function handleReplicatePOST(req, res)
 {
-	if(!process.env.REPLICATE_API_TOKEN)
-	{
-		console.error('The REPLICATE_API_TOKEN environment variable is not set.');
-		return res
-			.status(500)
-			.json({ detail: 'Server configuration error: missing API token'});
-	}
-
 	const clientIP =
 		req.headers['x-forwarded-for'] ||
 		req.socket?.remoteAddress ||
 		'127.0.0.1';
-		
+
 	const json = req.body;
 	
-	// CHeck password
+	// Check password
 	if(!checkPassword(json.password))
 	{
-		logDT(`${clientIP} Wrong password: "${json.password}"`, 'e');
+		clientFQDN = await getFQDN(clientIP);
+		logDT(`${clientIP} (${clientFQDN}) Wrong password: "${json.password}"`, 'e');
 		return res
 				.status(500)
 				.json({ detail: 'Wrong password!'});
@@ -238,12 +315,12 @@ async function handleReplicatePOST(req, res)
 	logDT(`${clientIP} ${shortModelName}\n"${json.modelPayload.prompt}"`, 'i');
 
 	const input = json.modelPayload;
-//	console.log('handleReplicatePOST(), Replicate model:', json.fullModelName, 'Replicate input:', input);
+	debug('handleReplicatePOST(), Replicate model:', json.fullModelName, 'Replicate input:', input);
 	
-	let jobOutput;
+	let replicateOutput;
 	try
 	{
-		jobOutput = await GApp.replicate.run(fullModelName, {input});
+		replicateOutput = await GApp.replicate.run(fullModelName, {input});
 	}
 	catch (err)
 	{
@@ -254,7 +331,7 @@ async function handleReplicatePOST(req, res)
 				.json({ detail: fullMessage});
 		return;
 	}
-//	console.log('handleReplicatePOST(), Replicate output:', jobOutput);
+	debug('handleReplicatePOST(), Replicate output:', replicateOutput);
 	
 	let resultPayload = {};
 	
@@ -267,16 +344,36 @@ async function handleReplicatePOST(req, res)
 				.json({ detail: 'No output handler!'});
 	}
 
-	resultPayload  = await outputHandler(jobOutput, input.output_format);
-//	console.log('handleReplicatePOST(), resultPayload:', resultPayload);
+	const metaData = 
+		{
+			title:			pjson.name + ' generated image',
+			author:			json.userName,
+			description:	json.modelPayload.prompt,
+			copyright:		'',							// FIX
+			software:		`${pjson.name}/${fullModelName}`,
+			disclaimer:		'',							// FIX
+			warning:		json.modelPayload.disable_safety_checker ? 'Safety filter disabled' : '',
+			source:			'',							// FIX
+			comment:		'',							// FIX
+		}; // metaData{}
+	
+	resultPayload  = await outputHandler(replicateOutput, input.output_format, metaData);
+	debug('handleReplicatePOST(), resultPayload:', resultPayload);
 
 	return res
 			.status(201)
 			.json(resultPayload);
 } // handleReplicatePOST()
 
-function initApp()
+async function initApp()
 {
+	if(GApp.replicateAPIToken=='')
+	{
+		console.error('The REPLICATE_API_TOKEN environment variable is not set.');
+		return;
+	}
+
+	GApp.replicate = new replicate({auth: GApp.replicateAPIToken});
 	GApp.passwords = process.env.PASSWORDS.split(GApp.passwordsSep);
 
 	GApp.express.use(express.static('public'));
@@ -284,8 +381,9 @@ function initApp()
 	GApp.express.post('/replicate', handleReplicatePOST);
 	GApp.express.listen(GApp.port, () =>
 	{
-		console.log(`${GApp.name} ${GApp.version} listening on port ${GApp.port}`)
+		logDT(`${pjson.name} ${pjson.version} listening on port ${GApp.port}`, 'i')
 	})
+
 /*
 	GApp.express.get('/replicate', (req, res) =>
 	{
@@ -294,21 +392,21 @@ function initApp()
 */
 
 	setInterval(imagePurgeHandler, 3600 * 1000);
-} //initApp()
+} // initApp()
 
 let GApp =
 {
-	name: 'Fluxim2',
-	version: '0.1',
-	imgNamePrefix: 'fluxim2',
-	port: process.env.PORT || 3000,
+	debugEnabled: process.env['DEBUG_MODE']=='1',
+	port: process.env['PORT'] || 3000,
 	express: express(),
-	replicateAPIToken: process.env.REPLICATE_API_TOKEN || '',
-	replicate: new replicate({auth: process.env.REPLICATE_API_TOKEN || ''}),
+	replicateAPIToken: process.env['REPLICATE_API_TOKEN'] || '',
 	passwords: [],
-	passwordsSep: process.env.PASSWORDS_SEP,
-	purgeTimeHours: parseInt(process.env.PURGE_IMAGES_OLDER_THAN),
-	logFilePath: process.env.LOG_FILE
+	passwordsSep: process.env['PASSWORDS_SEP'],
+	locale: process.env['LOCALE'],
+	purgeTimeHours: parseInt(process.env['PURGE_IMAGES_OLDER_THAN']),
+	logFilePath: process.env['LOG_FILE'],
+	imgNamePrefix: process.env['IMG_NAME_PREFIX'],
+	pngMetaDataEnabled: process.env['PNG_METADATA']=='1'
 }; // GApp
 
 initApp();
