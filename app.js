@@ -1,9 +1,10 @@
 const pjson = require('./package.json');
 const fs = require('fs');
-const path = require('path');
 const fsp = require('fs/promises');
+const path = require('path');
 const { buffer } = require('node:stream/consumers');   
 const dns = require('dns').promises;
+const https = require('https');
 const express = require('express');
 const replicate = require('replicate');
 const pngmeta = require('png-metadata-writer');
@@ -20,10 +21,33 @@ function debug()
 	console.log.apply(console, arguments);
 } // debug()
 
-function makeUniqueID()
+function makeDateId()
+{
+	const d = getDateTZ();
+
+	const year = d.getFullYear();
+	const month = String(d.getMonth() + 1).padStart(2, '0');
+	const day = String(d.getDate()).padStart(2, '0');
+
+	return year + month + day;
+} // makeDateId()
+
+function makeUniqueId()
 {
 	return Date.now().toString(36).substring(0, 6) + Math.random().toString(36).substring(2, 8).padStart(6, 0);
-} // makeUniqueID()
+} // makeUniqueId()
+
+function makeUniqueFileName(imageIndex, outputFormat)
+{
+	let fileName = '';
+	if(GApp.imgNamePrefix!=='')
+		fileName = `${GApp.imgNamePrefix}-`;
+	if(imageIndex>=0)
+		fileName += `${makeDateId()}-${makeUniqueId()}-${imageIndex}.${outputFormat}`;
+	else
+		fileName += `${makeDateId()}-${makeUniqueId()}.${outputFormat}`;
+	return fileName;
+} // makeUniqueFileName()
 
 async function getFQDN(ip)
 {
@@ -73,38 +97,123 @@ function mapValue(map, value, doFallback)
 	return result;
 } // mapValue()
 
-function deleteFilesOlderThan(dirPath, hours)
+function toLatin1(text)
+{
+	// Step 1: normalize and remove diacritics
+	let out = text
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '');
+
+	// Step 2: manual replacements for common non-decomposing chars
+	const map =
+	{
+		"ß": "ss",
+		"Æ": "AE",
+		"æ": "ae",
+		"Ø": "O",
+		"ø": "o",
+		"Ð": "D",
+		"ð": "d",
+		"Þ": "Th",
+		"þ": "th",
+		"Ł": "L",
+		"ł": "l",
+		"Œ": "OE",
+		"œ": "oe",
+		"–": "-",
+		"—": "-",
+		"“": "\"",
+		"”": "\"",
+		"‘": "'",
+		"’": "'"
+	}; // map
+
+	out = out.replace(/./g, (ch) =>
+	{
+		if(map[ch])
+			return map[ch];
+
+		// keep only Latin-1 range
+		if(ch.charCodeAt(0) <= 0xFF)
+			return ch;
+
+		return '';
+	});
+
+	return out;
+} // toLatin1()
+
+function objectToLatin1(obj)
+{
+	if(obj === null || typeof obj !== 'object')
+		return obj;
+
+	if(Array.isArray(obj))
+	{
+		for(let i = 0; i < obj.length; i++)
+		{
+			if(typeof obj[i] === 'string')
+				obj[i] = toLatin1(obj[i]);
+			else if (typeof obj[i] === 'object')
+				objectToLatin1(obj[i]);
+		}
+		return obj;
+	}
+
+	for(const key in obj)
+	{
+		if(!Object.prototype.hasOwnProperty.call(obj, key))
+			continue;
+
+		if(typeof obj[key] === 'string')
+			obj[key] = toLatin1(obj[key]);
+		else if(typeof obj[key] === 'object')
+			objectToLatin1(obj[key]);
+	}
+
+	return obj;
+} // objectToLatin1()
+
+async function deleteFilesOlderThan(dirPath, hours)
 {
 	const now = Date.now();
 	const maxAgeMs = hours * 60 * 60 * 1000;
 
-	let removedCnt = 0;
-	fs.readdir(dirPath, (err, files) =>
+	let delCnt = 0;
+	const files = await fsp.readdir(dirPath);
+	for(const file of files)
 	{
-		if(err)
-			return;
+		const filePath = path.join(dirPath, file);
 
-		for(let i=0; i<files.length; i++)
+		let stats;
+		try
 		{
-			const filePath = path.join(dirPath, files[i]);
-
-			fs.stat(filePath, (err, stats) =>
-			{
-				if(err)
-					return;
-				if(!stats.isFile())
-					return;
-
-				const ageMs = now - stats.mtimeMs;
-				if(ageMs > maxAgeMs)
-				{
-					fs.unlink(filePath, () => {});
-					removedCnt++;
-				}
-			});
+			stats = await fsp.stat(filePath);
 		}
-	});
-	return removedCnt;
+		catch(err)
+		{
+			continue; // cannot stat › skip
+		}
+
+		if(!stats.isFile())
+			continue;
+
+		if(now - stats.mtimeMs > maxAgeMs)
+		{
+			try
+			{
+				await fsp.unlink(filePath);
+				delCnt++;
+			}
+			catch(err)
+			{
+				// unlink failed › permission, lock, race condition, etc.
+				// intentionally ignored, but safely handled
+			}
+		}
+	}
+
+	return delCnt;
 } // deleteFilesOlderThan()
 
 
@@ -137,7 +246,7 @@ function getFullModelName(shortModelName)
 	for(let i=0; i<GModelInfo.length; i++)
 		if(GModelInfo[i].name===shortModelName)
 		{
-			result = GModelInfo[i].provider +  '/' + shortModelName;
+			result = GModelInfo[i].provider + '/' + shortModelName;
 			break;
 		}
 
@@ -160,16 +269,20 @@ function getOutputHandler(shortModelName)
 
 function addMetaData(buffer, metaData)
 {
-	let md = {'tEXt': {}};
-	md['tEXt']['Title'] = metaData.title;
-	md['tEXt']['Author'] = metaData.author;
-	md['tEXt']['Description'] = metaData.description;
-	md['tEXt']['Copyright'] = metaData.copyright;
-	md['tEXt']['Software'] = metaData.software;
-	md['tEXt']['Disclaimer'] = metaData.disclaimer;
-	md['tEXt']['Warning'] = metaData.warning;
-	md['tEXt']['Source'] = metaData.source;
-	md['tEXt']['Comment'] = metaData.comment;
+	const mdL1 = objectToLatin1(metaData);
+	const mdTXT =
+	{
+		'Title':		mdL1.title,
+		'Author':		mdL1.author,
+		'Description':	mdL1.description,
+		'Copyright':	mdL1.copyright,
+		'Software':		mdL1.software,
+		'Disclaimer':	mdL1.disclaimer,
+		'Warning':		mdL1.warning,
+		'Source':		mdL1.source,
+		'Comment':		mdL1.comment
+	};
+	const md = {'tEXt': mdTXT};
 
 	return pngmeta.writeMetadata(buffer, md);
 } // addMetaData()
@@ -211,8 +324,8 @@ async function processMultiResult(output, outputFormat, metaData)
 
 	for(const [index, item] of Object.entries(output))
 	{
-		const fileName = `${GApp.imgNamePrefix}-${makeUniqueID()}-${index}.${outputFormat}`;
-		const filePath = 'public/replicate/' + fileName;
+		const fileName = makeUniqueFileName(index, outputFormat);
+		const filePath = path.join(GApp.imagePath, fileName);
 		debug('processMultiResult(), result file: ', filePath);
 		await writeFile(filePath, item, outputFormat, metaData);
 		result.push(fileName);
@@ -226,8 +339,8 @@ async function processSingleResult(output, outputFormat, metaData)
 
 	debug('processSingleResult(), output:', output);
 
-	const fileName = `${GApp.imgNamePrefix}-${makeUniqueID()}.${outputFormat}`;
-	const filePath = 'public/replicate/' + fileName;
+	const fileName = makeUniqueFileName(-1, outputFormat);
+	const filePath = path.join(GApp.imagePath, fileName);
 	debug('processSingleResult(), result file: ', filePath);
 	await writeFile(filePath, output, outputFormat, metaData);
 	result.push(fileName);
@@ -240,22 +353,23 @@ async function processSingleResult(output, outputFormat, metaData)
 ** Application functions
 */
 
-function imagePurgeHandler()
+async function imagePurgeHandler()
 {
 	if(GApp.purgeTimeHours<=0)
 		return;
 
-	let	removedCnt = 0;
+	const imagePath = `./${GApp.imagePath}`;
+	let	delCnt = 0;
 	try
 	{
-		removedCnt = deleteFilesOlderThan('./public/replicate/', GApp.purgeTimeHours);
+		delCnt = await deleteFilesOlderThan(imagePath, GApp.purgeTimeHours);
 	}
 	catch(err)
 	{
 		const fullMessage = 'imagePurgeHandler() error: ' + err.message;
 		logDT(fullMessage, 'e');
 	}
-	logDT(`Purging files older than ${GApp.purgeTimeHours} hours from "./public/replicate/", removed ${removedCnt} files`, 'i');
+	logDT(`Purging files older than ${GApp.purgeTimeHours} hours from "${imagePath}", deleted ${delCnt} files`, 'i');
 } // imagePurgeHandler()
 
 function checkPassword(password)
@@ -267,12 +381,12 @@ function checkPassword(password)
 function logDT(message, level)
 {
 	const levelMap =
-		[
-			['',	'NONE'],
-			['e',	'ERROR'],
-			['i',	'INFO'],
-			['w',	'WARN']
-		]; // levelMap[]
+	[
+		['',	'NONE'],
+		['e',	'ERROR'],
+		['i',	'INFO'],
+		['w',	'WARN']
+	]; // levelMap[]
 
 	const timestamp = getDateTZ().toLocaleString(GApp.locale);
 	const typeStr = mapValue(levelMap, level, true);
@@ -312,7 +426,11 @@ async function handleReplicatePOST(req, res)
 	}
 
 	// Log info
-	logDT(`${clientIP} ${shortModelName}\n"${json.modelPayload.prompt}"`, 'i');
+	const MAX_PROMPT_DISPLAY_LEN = 150;
+	let shortPrompt = json.modelPayload.prompt;
+	if(shortPrompt.length>MAX_PROMPT_DISPLAY_LEN)
+		shortPrompt = shortPrompt.slice(0, MAX_PROMPT_DISPLAY_LEN) + ' [...]';
+	logDT(`${clientIP} ${shortModelName}\n"${shortPrompt}"`, 'i');
 
 	const input = json.modelPayload;
 	debug('handleReplicatePOST(), Replicate model:', json.fullModelName, 'Replicate input:', input);
@@ -322,14 +440,13 @@ async function handleReplicatePOST(req, res)
 	{
 		replicateOutput = await GApp.replicate.run(fullModelName, {input});
 	}
-	catch (err)
+	catch(err)
 	{
 		const fullMessage = 'replicate.run() error: ' + err.message;
 		logDT(fullMessage, 'e');
 		return res
 				.status(500)
 				.json({ detail: fullMessage});
-		return;
 	}
 	debug('handleReplicatePOST(), Replicate output:', replicateOutput);
 	
@@ -345,24 +462,35 @@ async function handleReplicatePOST(req, res)
 	}
 
 	const metaData = 
-		{
-			title:			pjson.name + ' generated image',
-			author:			json.userName,
-			description:	json.modelPayload.prompt,
-			copyright:		'',							// FIX
-			software:		`${pjson.name}/${fullModelName}`,
-			disclaimer:		'',							// FIX
-			warning:		json.modelPayload.disable_safety_checker ? 'Safety filter disabled' : '',
-			source:			'',							// FIX
-			comment:		'',							// FIX
-		}; // metaData{}
+	{
+		title:			pjson.name + ' generated image',
+		author:			json.userName,
+		description:	json.modelPayload.prompt,
+		copyright:		json.metaData.copyright,
+		software:		`${pjson.name}/${fullModelName}`,
+		disclaimer:		json.metaData.disclaimer,
+		warning:		json.modelPayload.disable_safety_checker ? 'Safety filter disabled' : '',
+		source:			'',							// FIX
+		comment:		json.metaData.comment
+	}; // metaData{}
 	
-	resultPayload  = await outputHandler(replicateOutput, input.output_format, metaData);
-	debug('handleReplicatePOST(), resultPayload:', resultPayload);
+	try
+	{
+		resultPayload  = await outputHandler(replicateOutput, input.output_format, metaData);
+		debug('handleReplicatePOST(), resultPayload:', resultPayload);
 
-	return res
-			.status(201)
-			.json(resultPayload);
+		return res
+				.status(201)
+				.json(resultPayload);
+	}
+	catch(err)
+	{
+		const fullMessage = outputHandler.toString() + ' error: ' + err.message;
+		logDT(fullMessage, 'e');
+		return res
+				.status(500)
+				.json({ detail: fullMessage});
+	}
 } // handleReplicatePOST()
 
 async function initApp()
@@ -375,23 +503,16 @@ async function initApp()
 
 	GApp.replicate = new replicate({auth: GApp.replicateAPIToken});
 	GApp.passwords = process.env.PASSWORDS.split(GApp.passwordsSep);
-
-	GApp.express.use(express.static('public'));
+	
+	GApp.express.use(express.static(GApp.publicPath));
 	GApp.express.use(express.json());
 	GApp.express.post('/replicate', handleReplicatePOST);
 	GApp.express.listen(GApp.port, () =>
 	{
 		logDT(`${pjson.name} ${pjson.version} listening on port ${GApp.port}`, 'i')
-	})
-
-/*
-	GApp.express.get('/replicate', (req, res) =>
-	{
-		res.send('Hello World!')
-	})
-*/
-
-	setInterval(imagePurgeHandler, 3600 * 1000);
+	});
+	
+	setInterval(imagePurgeHandler, GApp.purgeHandlerInterval * 1000);
 } // initApp()
 
 let GApp =
@@ -400,9 +521,12 @@ let GApp =
 	port: process.env['PORT'] || 3000,
 	express: express(),
 	replicateAPIToken: process.env['REPLICATE_API_TOKEN'] || '',
+	publicPath: 'public',
+	imagePath: 'public/replicate',
 	passwords: [],
 	passwordsSep: process.env['PASSWORDS_SEP'],
 	locale: process.env['LOCALE'],
+	purgeHandlerInterval: 3600,											// In seconds
 	purgeTimeHours: parseInt(process.env['PURGE_IMAGES_OLDER_THAN']),
 	logFilePath: process.env['LOG_FILE'],
 	imgNamePrefix: process.env['IMG_NAME_PREFIX'],

@@ -2,8 +2,10 @@ const formElem = document.getElementById('prompt-form');
 const outputElem = document.getElementById('output');
 const errorBoxElem = document.getElementById('error');
 
+const GImagePath = 'replicate/'
 const GDebugEnabled = true;
 let GLastPrompt = '';
+let GLastPromptNoLF = '';
 let GLastSeed = '';
 
 function debug()
@@ -38,7 +40,7 @@ function seededRandom(seed)
 	};
 } // seededRandom()
 
-function randomText(seed, len)
+function makeRandomText(seed, len)
 {
 	const chars = 'abcdefghijklmnopqrstuvwxyz';
 	let result = '';
@@ -51,7 +53,7 @@ function randomText(seed, len)
 	}
 
 	return result;
-} // randomText()
+} // makeRandomText()
 
 function aspectToSize(aspectStr, maxSize)
 {
@@ -108,7 +110,8 @@ function aspectToResolutionString(aspectStr)
 
 function reportError(message)
 {
-	console.log(message);
+	if(message!=='')
+		console.error(message);
 	errorBoxElem.textContent = message;
 	outputElem.innerHTML = '';
 } // reportError()
@@ -149,11 +152,45 @@ function alignTo16(value)
 	return (value + 15) & ~15;
 } // alignTo16()
 
+function replaceAllAll(text, search, replacement)
+{
+	let prev;
+	do
+	{
+		prev = text;
+		text = text.replaceAll(search, replacement);
+	}
+	while(text!==prev);
+
+	return text;
+} // replaceAllAll()
+
+function fixLFCR(text)
+{
+	let result = text;
+	result = replaceAllAll(result, '\r\n', '\n');
+	result = replaceAllAll(result, '\n ', '\n');
+	result = replaceAllAll(result, ' \n', '\n');
+	result = replaceAllAll(result, '\n\n', '\n');
+	return result;
+} // fixLFCR()
+
+function makeTitleText(prompt)
+{
+	const noLFCRText = fixLFCR(prompt);
+	return `Generated image:\n\n${noLFCRText.slice(0, 500)}`;
+} // makeTitleText()
+
+function makeDescrText(prompt)
+{
+	return fixLFCR(prompt).replaceAll('\n', '<br>');
+} // makeDescrText()
+
 function getImageHTML(fileName, w, h)
 {
-	console.log(fileName, w, h);
-	const url = 'replicate/' + fileName;
-	const title = `Generated image (${GLastPrompt})`;
+	debug('getImageHTML()', fileName, w, h);
+	const url = GImagePath + fileName;
+	const title = makeTitleText(GLastPrompt);
 	return	`
 			<div>
 				<a href="${url}" download="${fileName}" target="_blank" rel="noreferrer">
@@ -161,25 +198,29 @@ function getImageHTML(fileName, w, h)
 				</a>
 			</div>
 			<p class="meta">
-				${GLastPrompt}<br>
 				<i>Nazwa pliku:</i> <b>${fileName}</b><br>
 				<i>Ziarenko:</i> <b>${GLastSeed}</b>
+			</p>
+			<p class="meta" align="left">
+				<i>Opis:</i><br>
+				${makeDescrText(GLastPrompt)}
 			</p>
 			`;
 } // getImageHTML()
 
-function renderResult(resultJSON, aspectRatio)
+function renderResult(resultJSON, aspectRatio, imageSize)
 {
 	debug('renderResult()', resultJSON);
 	outputElem.innerHTML = '';
 
 	if(!resultJSON)
 	{
-		console.log('renderResult(), resultJSON undefined or null');
+		console.error('renderResult(), resultJSON undefined or null');
 		return;
 	}
 
-	const [w, h] = aspectToSize(aspectRatio, 1024);
+	const basePixelSize = imageMPToBaseResolution(imageSize);
+	const [w, h] = aspectToSize(aspectRatio, basePixelSize);
 	let htmlOutput = '';
 
 	if(Array.isArray(resultJSON))
@@ -195,83 +236,85 @@ function renderResult(resultJSON, aspectRatio)
 	outputElem.innerHTML = htmlOutput;
 } // renderResult()
 
-function getBFLPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety)
+function getBFLPayload(imageDescr)
 {
 	const payload = 
-		{
-			prompt: prompt,
-			aspect_ratio: aspectRatio,
-			seed: seed,
-			output_format: outputFormat,
-			disable_safety_checker: disableSafety,
-			safety_tolerance: 5,
-		};
+	{
+		prompt: imageDescr.prompt,
+		aspect_ratio: imageDescr.aspectRatio,
+		seed: imageDescr.seed,
+		output_format: imageDescr.outputFormat,
+		disable_safety_checker: imageDescr.disableSafety,
+		safety_tolerance: 5,
+	};
 	return payload;
 } // getBFLPayload()
 
-function getPrunaPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety, enhanceRandomness)
+function getPrunaPayload(imageDescr)
 {
-	const basePixelSize = imageMPToBaseResolution(imageSize);
-	console.log('getPrunaPayload()', imageSize, basePixelSize);
-	const [w, h] = aspectToSize(aspectRatio, basePixelSize);
-	const w16 = alignTo16(w);
-	const h16 = alignTo16(h);
+	const basePixelSize = imageMPToBaseResolution(imageDescr.imageSize);
+	console.log('getPrunaPayload()', imageDescr.imageSize, basePixelSize);
+	const [w, h] = aspectToSize(imageDescr.aspectRatio, basePixelSize);
 	const payload = 
-		{
-			prompt: prompt,
-			aspect_ratio: aspectRatio,
-			width: w16,
-			height: h16,
-			seed: seed,
-			go_fast: goFast,
-			output_format: outputFormat,
-			disable_safety_checker: disableSafety,
-			guidance_scale: 1,
-			num_inference_steps: 8
-		};
-	if(enhanceRandomness)
-		payload.prompt += '---RANDOM SEED: ' + randomText(seed, 16);
+	{
+		prompt: imageDescr.prompt,
+		aspect_ratio: imageDescr.aspectRatio,
+		width: alignTo16(w),
+		height: alignTo16(h),
+		seed: imageDescr.seed,
+		go_fast: imageDescr.goFast,
+		output_format: imageDescr.outputFormat,
+		disable_safety_checker: imageDescr.disableSafety,
+		prompt_upsampling: imageDescr.enhancePrompt,
+		guidance_scale: 1,
+		num_inference_steps: 8
+	};
+	if(imageDescr.enhanceRandomness)
+	{
+		const rndText = makeRandomText(seed, 36);
+		payload.prompt += ` [RANDOMIZATION] ${rndText.slice(0, 12)} ${rndText.slice(12, 24)} ${rndText.slice(24, 36)}`;
+	}
 	return payload;
 } // getPrunaPayload()
 
-function getHiDreamPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety)
+function getHiDreamPayload(imageDescr)
 {
 	const payload = 
-		{
-			prompt: prompt,
-			negative_prompt: '',
-			aspect_ratio: aspectRatio,
-			resolution: aspectToResolutionString(aspectRatio),
-			seed: seed,
-			speed_mode: goFast ? 'Extra Juiced 🚀 (even more speed)' : 'Unsqueezed 🍋 (highest quality)',
-			output_format: outputFormat,
-			disable_safety_checker: disableSafety,
-		};
+	{
+		prompt: imageDescr.prompt,
+		negative_prompt: '',
+		aspect_ratio: imageDescr.aspectRatio,
+		resolution: aspectToResolutionString(aspectRatio),
+		seed: imageDescr.seed,
+		speed_mode: imageDescr.goFast ? 'Extra Juiced 🚀 (even more speed)' : 'Unsqueezed 🍋 (highest quality)',
+		output_format: imageDescr.outputFormat,
+		disable_safety_checker: imageDescr.disableSafety,
+	};
 	return payload;
 } // getHiDreamPayload()
 
-function getQwenPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety)
+function getQwenPayload(imageDescr)
 {
 	const payload = 
-		{
-			prompt: prompt,
-			negative_prompt: "",
-			aspect_ratio: aspectRatio,
-			seed: seed,
-			go_fast: goFast,
-			output_format: outputFormat,
-			disable_safety_checker: disableSafety,
-			guidance: 4,
-			strength: 0.9,
-			image_size: "optimize_for_quality",
-			lora_scale: 1,
-			enhance_prompt: false,
-			num_inference_steps: 30
-		};
+	{
+		prompt: imageDescr.prompt,
+		negative_prompt: '',
+		aspect_ratio: imageDescr.aspectRatio,
+		seed: imageDescr.seed,
+		go_fast: imageDescr.goFast,
+		output_format: imageDescr.outputFormat,
+		disable_safety_checker: imageDescr.disableSafety,
+		guidance: 4,
+		strength: 0.9,
+		image_size: 'optimize_for_quality',
+		lora_scale: 1,
+		enhance_prompt: imageDescr.enhancePrompt,
+		num_inference_steps: 30
+	};
 	return payload;
 } // getQwenPayload()
 
-function getModelPayload(shortModelName, prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety)
+function getModelPayload(shortModelName, imageDescr)
 {
 	let result = {};
 	switch(shortModelName)
@@ -285,19 +328,29 @@ function getModelPayload(shortModelName, prompt, aspectRatio, imageSize, seed, o
 		case 'flux-2-klein-9b-base':
 		case 'flux-2-dev':
 		case 'flux-2-pro':
-			result = getBFLPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety);
+			result = getBFLPayload(imageDescr);
 			break;
+		// special case: it seems p-image supports JPG only
 		case 'p-image':
+		{
+			const imageDescrP = Object.assign(imageDescr, {outputFormat: 'jpg'});
+			if(imageDescrP.aspectRatio=='21:9')
+				imageDescrP.aspectRatio = '16:9';
+			else if(imageDescrP.aspectRatio=='9:21')
+				imageDescrP.aspectRatio = '9:16';
+			result = getPrunaPayload(imageDescrP);
+			break;
+		}
 		case 'z-image-turbo':
-			result = getPrunaPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety, true);
+			result = getPrunaPayload(imageDescr);
 			break;
 		case 'hidream-l1-fast':
 		case 'hidream-l1-dev':
 		case 'hidream-l1-full':
-			result = getHiDreamPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety);
+			result = getHiDreamPayload(imageDescr);
 			break;
 		case 'qwen-image':
-			result = getQwenPayload(prompt, aspectRatio, imageSize, seed, outputFormat, goFast, disableSafety);
+			result = getQwenPayload(imageDescr);
 			break;
 		default:
 			break;
@@ -353,47 +406,67 @@ async function submitHandler(event)
 	const userNameField = document.getElementById('userName');
 	const passwordField = document.getElementById('password');
 
-	const seedValue = parseInt(seedField.value, 10);
-	const finalSeed = Number.isNaN(seedValue) ? Math.floor(Math.random() * (1 << 30)) : seedValue;
 	const shortModelName = modelField.value;
 	if(shortModelName=='')
 	{
 		reportError('Please select model!');
 		return;
 	}
+
+	const seedValue = parseInt(seedField.value, 10);
+	const seedValueOk = !Number.isNaN(seedValue);
+	GLastSeed = seedValueOk ? seedValue : Math.floor(Math.random() * (1 << 30));
 	
-	const aspectRatio = aspectField.value;
-	const imageSize = parseInt(imageSizeField.value);
-	const fileFormat = fileFormatField.value;
 	GLastPrompt = promptField.value;
 	if(GLastPrompt=='')
 		GLastPrompt = 'Test image';
-	else
-		GLastPrompt = GLastPrompt.replaceAll('\r\n', '\n').replaceAll('\n\n', '\n').replaceAll('\n\n', '\n').replaceAll('\n\n', '\n').replaceAll('\n', '. ');
-	GLastSeed = finalSeed;
+	GLastPromptNoLF = fixLFCR(GLastPrompt).replaceAll('\n', '. ');
 
-	const modelPayload = getModelPayload(shortModelName, GLastPrompt, aspectRatio, imageSize, finalSeed, fileFormat, false, true);
-	//console.log(modelPayload);
+	const aspectRatio = aspectField.value;
+	const imageSize = parseInt(imageSizeField.value);
+	const fileFormat = fileFormatField.value;
+
+	// Generation parameters pack
+	const imageDescr =
+	{
+		prompt: GLastPromptNoLF,
+		aspectRatio: aspectRatio,
+		imageSize: imageSize,
+		seed: GLastSeed,
+		outputFormat: fileFormat,
+		goFast: false,
+		disableSafety: true,
+		enhancePrompt: false,
+		enhanceRandomness: !seedValueOk
+	};
+	const modelPayload = getModelPayload(shortModelName, imageDescr);
+	debug('modelPayload', modelPayload);
 
 	const requestPayload =
 	{
 		shortModelName: shortModelName,
 		userName: userNameField.value,
 		password: passwordField.value,
-		modelPayload: modelPayload
+		modelPayload: modelPayload,
+		metaData:
+		{
+			copyright: '',					// FIX
+			disclaimer: '',					// FIX
+			comment: ''						// FIX
+		}
 	};
-	debug(requestPayload);
+	debug('requestPayload', requestPayload);
 	
-	let replicateRequest;
 	try
 	{
 		debug('submitHandler(), before fetch()');
-		const replicateResponse = await fetch('/replicate',
-			{
-				method: 'POST',
-				headers: {'Content-Type': 'application/json'},
-				body: JSON.stringify(requestPayload)
-			});
+		const fetchRequest = 
+		{
+			method: 'POST',
+			headers: {'Content-Type': 'application/json'},
+			body: JSON.stringify(requestPayload)
+		};
+		const replicateResponse = await fetch('/replicate', fetchRequest);
 		debug('/replicate response:', replicateResponse);
 		if(replicateResponse.status!=201)
 		{
@@ -402,9 +475,9 @@ async function submitHandler(event)
 			reportError(`/replicate response: ${replicateResponse.status} (${message})`);
 			return;
 		}
-		replicateResponse.json().then(parsedValue => renderResult(parsedValue, aspectRatio));
+		replicateResponse.json().then(parsedValue => renderResult(parsedValue, aspectRatio, imageSize));
 	}
-	catch (err)
+	catch(err)
 	{
 		reportError('/replicate error: ' + err.message);
 		return;
